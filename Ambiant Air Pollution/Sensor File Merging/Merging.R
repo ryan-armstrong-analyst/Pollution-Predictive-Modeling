@@ -1,16 +1,4 @@
----
-title: "Initial Merging"
-author: "Ryan Armstrong"
-date: "2026-11-05"
-output: html_document
----
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-
-``` {r}
 library(data.table)
 # all zip files (and their destination after)
 input_folder <- "Y:/Ryan Armstrong/Pollution Modeling/Ambiant Air Pollution/Input Data/Air Pollution Input"
@@ -62,6 +50,3 @@ for (code in codes) {
 }
 
 message("Done.")
-
-
-```
