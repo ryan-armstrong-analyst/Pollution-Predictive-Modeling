@@ -40,13 +40,13 @@ for (code in codes) {
   # convert Date.Local to Date format
   dt[, Date.Local := as.Date(Date.Local)]
   
-  # keep only rows from years 2000 through 2019
-  dt <- dt[!is.na(Date.Local) & as.integer(format(Date.Local, "%Y")) %in% 2000:2019]
-  message("Rows after year filter (2000-2019): ", format(nrow(dt), big.mark = ","))
+  # keep only rows from years 2010 through 2019
+  dt <- dt[!is.na(Date.Local) & as.integer(format(Date.Local, "%Y")) %in% 2010:2019]
+  message("Rows after year filter (2010-2019): ", format(nrow(dt), big.mark = ","))
   
   # skip if no rows remain
   if (nrow(dt) == 0) {
-    message("No rows for 2000-2019 in ", in_file)
+    message("No rows for 2010-2019 in ", in_file)
     next
   }
   
@@ -127,7 +127,7 @@ for (code in codes) {
   ))
   
   # write monthly aggregated output
-  out_file <- file.path(output_folder, paste0("monthly_", code, "_2000_2019.csv"))
+  out_file <- file.path(output_folder, paste0("monthly_", code, "_2010_2019.csv"))
   fwrite(monthly, out_file)
   
   message("Saved: ", out_file)
