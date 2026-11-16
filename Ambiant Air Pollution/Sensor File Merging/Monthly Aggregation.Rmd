@@ -1,0 +1,113 @@
+---
+title: "Monthly Aggregation (and Cleaning)"
+author: "Ryan Armstrong"
+date: "2026-11-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+``` {r}
+library(data.table)
+
+input_folder <- "Y:/Ryan Armstrong/Pollution Modeling/Ambiant Air Pollution/Input Data/Merged Air Pollution Data"
+output_folder <- "Y:/Ryan Armstrong/Pollution Modeling/Ambiant Air Pollution/Input Data/Monthly Aggregated Air Pollution Data"
+
+dir.create(output_folder, recursive = TRUE, showWarnings = FALSE)
+
+codes <- c("44201", "42602", "42401", "42101")
+
+for (code in codes) {
+  
+  in_file <- file.path(input_folder, paste0("merged_", code, ".csv"))
+  
+  if (!file.exists(in_file)) {
+    message("Missing file: ", in_file)
+    next
+  }
+  
+  message("Reading: ", in_file)
+  dt <- fread(in_file)
+  
+  # date conversion
+  dt[, Date.Local := as.Date(Date.Local)]
+  
+  # keep only 2000-2019
+  dt <- dt[!is.na(Date.Local) & as.integer(format(Date.Local, "%Y")) %in% 2000:2019]
+  
+  if (nrow(dt) == 0) {
+    message("No rows for 2021-2026 in ", in_file)
+    next
+  }
+  
+  # filter sample duration where needed
+  if ("Sample.Duration" %in% names(dt)) {
+    
+    # REPLACE these exact values if your labels differ
+    if (code == "42101") {
+      dt <- dt[Sample.Duration == "8-HR RUN AVG END HOUR" | Sample.Duration == "8-HR RUN AVG BEGIN HOUR"]
+    }
+    
+    if (code == "42401") {
+      dt <- dt[Sample.Duration == "1 HOUR"]
+    }
+  }
+  
+  if (nrow(dt) == 0) {
+    message("No rows left after Sample.Duration filter for ", code)
+    next
+  }
+  
+  # if multiple rows still exist for same site/date, keep first after sorting
+  sort_cols <- intersect(
+    c("State.Code", "County.Code", "Site.Num", "Date.Local", "POC"),
+    names(dt)
+  )
+  setorderv(dt, sort_cols)
+  
+  dt <- dt[, .SD[1], by = .(State.Code, County.Code, Site.Num, Date.Local)]
+  
+  # create year/month
+  dt[, year := as.integer(format(Date.Local, "%Y"))]
+  dt[, month := as.integer(format(Date.Local, "%m"))]
+  
+  # monthly aggregation with lat/long kept
+  monthly <- dt[
+    ,
+    .(
+      monthly_mean = mean(Arithmetic.Mean, na.rm = TRUE),
+      days_with_data = sum(!is.na(Arithmetic.Mean))
+    ),
+    by = .(
+      State.Code,
+      County.Code,
+      Site.Num,
+      Latitude,
+      Longitude,
+      year,
+      month
+    )
+  ]
+  
+  monthly[, year_month := sprintf("%04d-%02d", year, month)]
+  monthly[, pollutant_code := code]
+  
+  setcolorder(monthly, c(
+    "pollutant_code",
+    "State.Code", "County.Code", "Site.Num",
+    "Latitude", "Longitude",
+    "year", "month", "year_month",
+    "monthly_mean", "days_with_data"
+  ))
+  
+  out_file <- file.path(output_folder, paste0("monthly_", code, "_2000_2019.csv"))
+  fwrite(monthly, out_file)
+  
+  message("Saved: ", out_file)
+}
+
+message("Done.")
+
+```

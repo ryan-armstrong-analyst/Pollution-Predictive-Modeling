@@ -1,0 +1,203 @@
+---
+title: "Covariate Merging Onto Grid"
+author: "Ryan Armstrong"
+date: "2026-11-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+``` {r}
+library(sf)
+library(terra)
+library(dplyr)
+library(tigris)
+library(arrow)
+
+options(tigris_use_cache = TRUE)
+sf_use_s2(FALSE)
+
+pred_dir <- "Y:/Ryan Armstrong/Pollution Modeling/Ambiant Air Pollution/Input Data/Predictors"
+
+prism_files <- c(
+  file.path(pred_dir, "prismcompos.129.22.99.132.315.11.56.13.nc"), # tmax
+  file.path(pred_dir, "prismcompos.129.22.99.132.315.11.57.5.nc"),  # tmin
+  file.path(pred_dir, "prismcompos.129.22.99.132.315.11.58.39.nc")  # precip
+)
+
+out_dir <- "Y:/Ryan Armstrong/Pollution Modeling/Ambiant Air Pollution/Input Data/Processed/Phase1_PRISM_Grid"
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+# master grid outputs
+out_parquet <- file.path(out_dir, "prism_master_grid_allcells.parquet")
+out_csv     <- file.path(out_dir, "prism_master_grid_allcells.csv")
+out_gpkg    <- file.path(out_dir, "prism_master_grid_allcells.gpkg")
+out_shp     <- file.path(out_dir, "prism_master_grid_allcells.shp")
+out_tif     <- file.path(out_dir, "prism_template_rectified_flipped.tif")
+
+# merged PRISM covariate outputs
+out_prism_parquet <- file.path(out_dir, "prism_covariates_merged.parquet")
+out_prism_csv     <- file.path(out_dir, "prism_covariates_merged.csv")
+out_prism_gpkg    <- file.path(out_dir, "prism_covariates_merged.gpkg")
+out_prism_shp     <- file.path(out_dir, "prism_covariates_merged.shp")
+
+```
+
+
+``` {r}
+#----------------------------------
+# Orientation check with first file
+#----------------------------------
+r_raw_check <- rast(prism_files[1])
+
+r_fix <- project(r_raw_check[[1]], "EPSG:4326", method = "bilinear")
+r_fix_flip <- flip(r_fix, direction = "vertical")
+
+states_sf <- tigris::states(cb = TRUE, year = 2022) |>
+  st_as_sf() |>
+  filter(!STUSPS %in% c("AK","HI","PR","VI","GU","MP","AS")) |>
+  st_transform(4326)
+
+par(mfrow = c(1,2))
+plot(r_fix, main = "Rectified")
+plot(st_geometry(states_sf), add = TRUE, border = "red", lwd = 1)
+
+plot(r_fix_flip, main = "Rectified + Vertical Flip")
+plot(st_geometry(states_sf), add = TRUE, border = "red", lwd = 1)
+
+#----------------------------------
+# Build corrected PRISM template
+#----------------------------------
+r_raw <- rast(prism_files[1])
+
+r_template <- project(r_raw[[1]], "EPSG:4326", method = "bilinear")
+r_template <- flip(r_template, direction = "vertical")
+
+writeRaster(r_template, out_tif, overwrite = TRUE)
+
+print(r_template)
+print(ext(r_template))
+print(res(r_template))
+print(names(r_template))
+```
+
+``` {r}
+#----------------------------------
+# Build full PRISM master grid
+#----------------------------------
+grid_df <- as.data.frame(r_template, xy = TRUE, cells = TRUE, na.rm = TRUE)
+
+names(grid_df)[names(grid_df) == "cell"] <- "prism_cell"
+names(grid_df)[names(grid_df) == "x"] <- "lon"
+names(grid_df)[names(grid_df) == "y"] <- "lat"
+
+grid_df <- grid_df |>
+  mutate(grid_id = seq_len(n())) |>
+  select(grid_id, prism_cell, lon, lat)
+
+grid_sf <- st_as_sf(grid_df, coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+# save master grid
+write_parquet(grid_df, out_parquet)
+write.csv(grid_df, out_csv, row.names = FALSE)
+
+if (file.exists(out_gpkg)) file.remove(out_gpkg)
+st_write(grid_sf, out_gpkg, delete_dsn = TRUE, quiet = TRUE)
+
+if (file.exists(out_shp)) file.remove(out_shp)
+st_write(grid_sf, out_shp, delete_layer = TRUE, quiet = TRUE)
+
+cat("\nMaster grid rows:\n")
+print(nrow(grid_df))
+
+cat("\nMaster grid latitude range:\n")
+print(range(grid_df$lat))
+
+cat("\nMaster grid outputs:\n")
+cat(out_parquet, "\n")
+cat(out_csv, "\n")
+cat(out_gpkg, "\n")
+cat(out_shp, "\n")
+cat(out_tif, "\n")
+#----------------------------------
+# Function to rectify + flip + extract one PRISM variable
+#----------------------------------
+extract_prism_var <- function(nc_file) {
+  r_raw <- rast(nc_file)
+  
+  r_fix <- project(r_raw[[1]], "EPSG:4326", method = "bilinear")
+  r_fix <- flip(r_fix, direction = "vertical")
+  
+  df <- as.data.frame(r_fix, xy = TRUE, cells = TRUE, na.rm = TRUE)
+  
+  names(df)[names(df) == "cell"] <- "prism_cell"
+  names(df)[names(df) == "x"] <- "lon"
+  names(df)[names(df) == "y"] <- "lat"
+  
+  var_name <- names(r_fix)[1]
+  
+  df <- df |>
+    select(prism_cell, all_of(var_name))
+  
+  return(df)
+}
+
+#----------------------------------
+# Extract and merge all 3 PRISM variables
+#----------------------------------
+prism_list <- lapply(prism_files, extract_prism_var)
+
+prism_vars_df <- Reduce(
+  function(x, y) full_join(x, y, by = "prism_cell"),
+  prism_list
+)
+
+grid_cov_df <- grid_df |>
+  left_join(prism_vars_df, by = "prism_cell")
+
+print(names(grid_cov_df))
+print(head(grid_cov_df))
+
+```
+
+
+``` {r}
+#----------------------------------
+# Save merged PRISM covariate table
+#----------------------------------
+grid_cov_sf <- st_as_sf(grid_cov_df, coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+
+write_parquet(grid_cov_df, out_prism_parquet)
+write.csv(grid_cov_df, out_prism_csv, row.names = FALSE)
+
+if (file.exists(out_prism_gpkg)) file.remove(out_prism_gpkg)
+st_write(grid_cov_sf, out_prism_gpkg, delete_dsn = TRUE, quiet = TRUE)
+
+if (file.exists(out_prism_shp)) file.remove(out_prism_shp)
+st_write(grid_cov_sf, out_prism_shp, delete_layer = TRUE, quiet = TRUE)
+
+cat("\nMerged PRISM rows:\n")
+print(nrow(grid_cov_df))
+
+cat("\nMerged PRISM latitude range:\n")
+print(range(grid_cov_df$lat))
+
+cat("\nMerged PRISM outputs:\n")
+cat(out_prism_parquet, "\n")
+cat(out_prism_csv, "\n")
+cat(out_prism_gpkg, "\n")
+cat(out_prism_shp, "\n")
+
+#----------------------------------
+# Final checks
+#----------------------------------
+summary(grid_cov_df$tmax)
+summary(grid_cov_df$tmin)
+summary(grid_cov_df$precip)
+
+cat("\nFinal columns:\n")
+print(names(grid_cov_df))
+
+```
